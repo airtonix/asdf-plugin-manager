@@ -52,16 +52,28 @@ EOF
     exit 1
 }
 
-print_git_compare_url() {
-    local provider_url="$1"
-    local plugin_ref_current="$2"
-    local plugin_ref_head="$3"
 
-    if $(echo "${provider_url}" | grep -q 'github'); then
-        echo "${plugin_url%.*}/compare/${plugin_ref_current}...${plugin_ref_head}"
-    elif $(echo "${provider_url}" | grep -q 'gitlab'); then
-        echo "${plugin_url%.*}/-/compare/${plugin_ref_current}...${plugin_ref_head}"
-    fi
+print_git_compare_url() {
+    local provider_url
+    local plugin_ref_current
+    local plugin_ref_head
+
+    provider_url="$1"
+    plugin_ref_current="$2"
+    plugin_ref_head="$3"
+
+	case "${provider_url}" in
+		*github*)
+			echo "${provider_url%.*}/compare/${plugin_ref_current}...${plugin_ref_head}"
+			;;
+		*gitlab*)
+			echo "${provider_url%.*}/-/compare/${plugin_ref_current}...${plugin_ref_head}"
+			;;
+		*)
+			# Unsupported provider.
+			exit 127
+			;;
+	esac
 }
 
 export_plugins() {
@@ -76,7 +88,10 @@ checkout_plugin_ref() {
 }
 
 list_plugins() {
-    plugin_name=$1
+	local plugin_name
+
+    plugin_name="$1"
+
     if [[ -n ${plugin_name} ]]; then
         grep "^${plugin_name} " "$(print_plugin_versions_filename)"
     else
@@ -85,21 +100,27 @@ list_plugins() {
 }
 
 remove_plugins() {
-    local managed_plugins="$1"
-    echo "${managed_plugins}" | while read managed_plugin; do
-        read -r plugin_name _plugin_url _plugin_ref < <(echo ${managed_plugin})
+    local managed_plugins
+
+	managed_plugins="$1"
+
+    echo "${managed_plugins}" | while read managed_plugin -r; do
+        read -r plugin_name _plugin_url _plugin_ref < <(echo "${managed_plugin}")
         echo "[INFO] Removing: ${plugin_name}"
         asdf plugin remove "${plugin_name}" || true
     done
 }
 
 add_plugins() {
-    local managed_plugins="$1"
-    echo "${managed_plugins}" | while read managed_plugin; do
-        read -r plugin_name plugin_url plugin_ref < <(echo ${managed_plugin})
+    local managed_plugins
+
+	managed_plugins="$1"
+
+    echo "${managed_plugins}" | while read managed_plugin -r; do
+        read -r plugin_name plugin_url plugin_ref < <(echo "${managed_plugin}")
         echo "[INFO] Adding: ${plugin_name} ${plugin_url} ${plugin_ref}"
-        if [[ "$(echo ${ADD_CLEAN} | tr '[:upper:]' '[:lower:]')" == 'true' ]]; then
-            remove_plugins "$(list_plugins ${plugin_name})"
+        if [[ "$(echo "${ADD_CLEAN}" | tr '[:upper:]' '[:lower:]')" == 'true' ]]; then
+            remove_plugins "$(list_plugins "${plugin_name}")"
         fi
         asdf plugin add "${plugin_name}" "${plugin_url}"
         # TODO: Remove the plugin update once asdf supports adding plugin with git-ref.
@@ -109,30 +130,52 @@ add_plugins() {
     done
 }
 
+get_plugin_ref() {
+	local plugin_name
+
+	plugin_name="$1"
+
+	export_plugins | grep -E "^\b${plugin_name}\b\s+" | sed -e 's/^.*\s//'
+}
+
+update_plugin() {
+	local managed_plugin
+
+	managed_plugin="$1"
+
+	read -r plugin_name plugin_url plugin_ref_managed < <(echo "${managed_plugin}")
+
+	echo "[INFO] Updating: ${plugin_name} ${plugin_url} ${plugin_ref_managed} to HEAD"
+
+	plugin_ref_before_update="$(get_plugin_ref "${plugin_name}")"
+	asdf plugin update "${plugin_name}"
+	plugin_ref_after_update="$(get_plugin_ref "${plugin_name}")"
+
+	if [[ "${plugin_ref_before_update}" == "${plugin_ref_after_update}" ]]; then
+		echo "[INFO] The plugin \"${plugin_name}\" with git-ref \"${plugin_ref_managed}\" is already up-to-date."
+		return 0
+	fi
+
+	echo "[INFO] Updating git-ref in plugin version file: $(print_plugin_versions_filename)"
+	sed -i "/^\b${plugin_name}\b/ s/${plugin_ref_managed}/${plugin_ref_after_update}/" "$(print_plugin_versions_filename)"
+
+	echo '!!!'
+	echo "[CAUTION] Please review the changes since last update:"
+
+	print_git_compare_url "${plugin_url}" "${plugin_ref_managed}" "${plugin_ref_after_update}"
+
+	echo '!!!'
+
+	echo "[INFO] Done."
+}
+
 update_plugins() {
-    local managed_plugins="$1"
-    echo "${managed_plugins}" | while read managed_plugin; do
-        read -r plugin_name plugin_url plugin_ref_managed < <(echo ${managed_plugin})
+    local managed_plugins
 
-        echo "[INFO] Updating: ${plugin_name} ${plugin_url} ${plugin_ref_managed} to HEAD"
-        plugin_ref_before_update="$(export_plugins | egrep "^\b${plugin_name}\b\s+" | sed -e 's/^.*\s//')"
-        asdf plugin update "${plugin_name}"
-        plugin_ref_after_update="$(export_plugins | egrep "^\b${plugin_name}\b\s+" | sed -e 's/^.*\s//')"
+	managed_plugins="$1"
 
-        if [[ "${plugin_ref_before_update}" == "${plugin_ref_after_update}" ]]; then
-            echo "[INFO] The plugin \"${plugin_name}\" with git-ref \"${plugin_ref_managed}\" is already up-to-date."
-            continue
-        fi
-
-        echo "[INFO] Updating git-ref in plugin version file: $(print_plugin_versions_filename)"
-        sed -i "/^\b${plugin_name}\b/ s/${plugin_ref_managed}/${plugin_ref_after_update}/" "$(print_plugin_versions_filename)"
-
-        echo '!!!'
-        echo "[CAUTION] Please review the changes since last update:"
-        echo "$(print_git_compare_url ${plugin_url} ${plugin_ref_managed} ${plugin_ref_after_update})"
-        echo '!!!'
-
-        echo "[INFO] Done."
+    echo "${managed_plugins}" | while read managed_plugin -r; do
+        update_plugin "$managed_plugin"
     done
 }
 
