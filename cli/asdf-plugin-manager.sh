@@ -12,19 +12,44 @@ ADD_CLEAN="${ASDF_PLUGIN_MANAGER_ADD_CLEAN:-FALSE}"
 PLUGINS_REPOS_DIR="$(asdf info | grep ASDF_DATA_DIR | cut -d"=" -f2)/plugins"
 
 #
+# Error Trapping
+#
+ERRORCODE_UNSUPPORTED_PROVIDER=8
+ERRORCODE_MISSING_VERSION_FILE=9
+handle_error_codes() {
+	local error_code
+	error_code=$1
+	case $error_code in
+
+	"$ERRORCODE_UNSUPPORTED_PROVIDER")
+		echo "[ERROR] Unsupported provider. Supported providers are GitHub and GitLab."
+		;;
+	"$ERRORCODE_MISSING_VERSION_FILE")
+		echo -e "[ERROR] The '$(print_plugin_versions_filename)' file is not found. Check help for more details:\n"
+		print_help
+		;;
+	*)
+		echo "[ERROR] Unknown error code: $error_code"
+		;;
+	esac
+}
+
+trap 'handle_error_codes $?' ERR
+
+#
 # Functions.
 #
 
 print_version() {
-    echo "${VERSION}"
+	echo "${VERSION}"
 }
 
 print_plugin_versions_filename() {
-    echo "${PLUGIN_VERSIONS_FILENAME}"
+	echo "${PLUGIN_VERSIONS_FILENAME}"
 }
 
 print_help() {
-    cat <<EOF
+	cat <<EOF
 asdf-plugin-manager
 
 Manage asdf plugins securely and declaratively via ".plugin-versions" file.
@@ -49,91 +74,90 @@ USAGE:
   asdf-plugin-manager remove-all              : Remove all plugins according to .plugin-versions file
 EOF
 
-    exit 1
+	exit 1
 }
 
-
 print_git_compare_url() {
-    local provider_url
-    local plugin_ref_current
-    local plugin_ref_head
+	local provider_url
+	local plugin_ref_current
+	local plugin_ref_head
 
-    provider_url="$1"
-    plugin_ref_current="$2"
-    plugin_ref_head="$3"
+	provider_url="$1"
+	plugin_ref_current="$2"
+	plugin_ref_head="$3"
 
 	case "${provider_url}" in
-		*github*)
-			echo "${provider_url%.*}/compare/${plugin_ref_current}...${plugin_ref_head}"
-			;;
-		*gitlab*)
-			echo "${provider_url%.*}/-/compare/${plugin_ref_current}...${plugin_ref_head}"
-			;;
-		*)
-			# Unsupported provider.
-			exit 127
-			;;
+	*github*)
+		echo "${provider_url%.*}/compare/${plugin_ref_current}...${plugin_ref_head}"
+		;;
+	*gitlab*)
+		echo "${provider_url%.*}/-/compare/${plugin_ref_current}...${plugin_ref_head}"
+		;;
+	*)
+		# Unsupported provider.
+		exit $ERRORCODE_UNSUPPORTED_PROVIDER
+		;;
 	esac
 }
 
 export_plugins() {
-    asdf plugin-list --refs --urls | tr -s ' ' | cut -d ' ' -f 1,2,4 | column -t
+	asdf plugin-list --refs --urls | tr -s ' ' | cut -d ' ' -f 1,2,4 | column -t
 }
 
 # Mimic 'asdf plugin update' to avoid "fatal: couldn't find remote ref ...".
 checkout_plugin_ref() {
-    local plugin_name
-    local plugin_ref
+	local plugin_name
+	local plugin_ref
 	local git_dir
 
-    plugin_name="${1}"
-    plugin_ref="${2}"
-    git_dir="${PLUGINS_REPOS_DIR}/${plugin_name}"
+	plugin_name="${1}"
+	plugin_ref="${2}"
+	git_dir="${PLUGINS_REPOS_DIR}/${plugin_name}"
 
-    git -C "${git_dir}" checkout  "${plugin_ref}"
+	git -C "${git_dir}" checkout "${plugin_ref}"
 }
 
 list_plugins() {
 	local plugin_name
 
-    plugin_name="$1"
+	plugin_name="$1"
 
-    if [[ -n ${plugin_name} ]]; then
-        grep "^${plugin_name} " "$(print_plugin_versions_filename)"
-    else
-        grep -v "^#" "$(print_plugin_versions_filename)"
-    fi
+	if [[ -n ${plugin_name} ]]; then
+		grep "^${plugin_name} " "$(print_plugin_versions_filename)"
+	else
+		grep -v "^#" "$(print_plugin_versions_filename)"
+	fi
 }
 
 remove_plugins() {
-    local managed_plugins
+	local managed_plugins
 
 	managed_plugins="$1"
 
-    echo "${managed_plugins}" | while read managed_plugin -r; do
-        read -r plugin_name _plugin_url _plugin_ref < <(echo "${managed_plugin}")
-        echo "[INFO] Removing: ${plugin_name}"
-        asdf plugin remove "${plugin_name}" || true
-    done
+	echo "${managed_plugins}" | while read managed_plugin -r; do
+		read -r plugin_name _plugin_url _plugin_ref < <(echo "${managed_plugin}")
+		echo "[INFO] Removing: ${plugin_name}"
+		asdf plugin remove "${plugin_name}" || true
+	done
 }
 
 add_plugins() {
-    local managed_plugins
+	local managed_plugins
 
 	managed_plugins="$1"
 
-    echo "${managed_plugins}" | while read managed_plugin -r; do
-        read -r plugin_name plugin_url plugin_ref < <(echo "${managed_plugin}")
-        echo "[INFO] Adding: ${plugin_name} ${plugin_url} ${plugin_ref}"
-        if [[ "$(echo "${ADD_CLEAN}" | tr '[:upper:]' '[:lower:]')" == 'true' ]]; then
-            remove_plugins "$(list_plugins "${plugin_name}")"
-        fi
-        asdf plugin add "${plugin_name}" "${plugin_url}"
-        # TODO: Remove the plugin update once asdf supports adding plugin with git-ref.
-        # https://github.com/asdf-vm/asdf/pull/1204
-        checkout_plugin_ref "${plugin_name}" "${plugin_ref}"
-        echo "[INFO] Done."
-    done
+	echo "${managed_plugins}" | while read managed_plugin -r; do
+		read -r plugin_name plugin_url plugin_ref < <(echo "${managed_plugin}")
+		echo "[INFO] Adding: ${plugin_name} ${plugin_url} ${plugin_ref}"
+		if [[ "$(echo "${ADD_CLEAN}" | tr '[:upper:]' '[:lower:]')" == 'true' ]]; then
+			remove_plugins "$(list_plugins "${plugin_name}")"
+		fi
+		asdf plugin add "${plugin_name}" "${plugin_url}"
+		# TODO: Remove the plugin update once asdf supports adding plugin with git-ref.
+		# https://github.com/asdf-vm/asdf/pull/1204
+		checkout_plugin_ref "${plugin_name}" "${plugin_ref}"
+		echo "[INFO] Done."
+	done
 }
 
 get_plugin_ref() {
@@ -157,6 +181,9 @@ update_plugin() {
 	asdf plugin update "${plugin_name}"
 	plugin_ref_after_update="$(get_plugin_ref "${plugin_name}")"
 
+	#
+	# If the plugin ref is the same before and after the update, then the plugin is already up-to-date.
+	# let's just skip it.
 	if [[ "${plugin_ref_before_update}" == "${plugin_ref_after_update}" ]]; then
 		echo "[INFO] The plugin \"${plugin_name}\" with git-ref \"${plugin_ref_managed}\" is already up-to-date."
 		return 0
@@ -176,13 +203,22 @@ update_plugin() {
 }
 
 update_plugins() {
-    local managed_plugins
+	local managed_plugins
 
 	managed_plugins="$1"
 
-    echo "${managed_plugins}" | while read managed_plugin -r; do
-        update_plugin "$managed_plugin"
-    done
+	echo "${managed_plugins}" | while read managed_plugin -r; do
+		update_plugin "$managed_plugin"
+	done
+}
+
+require_version_file(){
+	# Check if the plugin versions file exists.
+	if test -f "$(print_plugin_versions_filename)"; then
+		return 0
+	fi
+
+	exit $ERRORCODE_MISSING_VERSION_FILE
 }
 
 #
@@ -192,56 +228,51 @@ update_plugins() {
 # Check basic args.
 case "$1" in
 help | -h | "")
-    print_help
-    ;;
+	print_help
+	;;
 version | -n)
-    print_version
-    exit 0
-    ;;
+	print_version
+	exit 0
+	;;
 esac
 
-# Check if the plugin versions file exists.
-if ! test -f "$(print_plugin_versions_filename)"; then
-    echo -e "[ERROR] The '$(print_plugin_versions_filename)' file is not found. Check help for more details:\n"
-    print_help
-fi
 
 while test -n "$1"; do
-    case "$1" in
-    export)
-        export_plugins
-        ;;
-    list)
-        list_plugins
-        ;;
-    add)
-        test -n "$2" || print_help
-        add_plugins "$(list_plugins $2)"
-        shift
-        ;;
-    add-all)
-        add_plugins "$(list_plugins)"
-        ;;
-    update)
-        test -n "$2" || print_help
-        update_plugins "$(list_plugins $2)"
-        shift
-        ;;
-    update-all)
-        update_plugins "$(list_plugins)"
-        ;;
-    remove)
-        test -n "$2" || print_help
-        remove_plugins "$(list_plugins $2)"
-        shift
-        ;;
-    remove-all)
-        remove_plugins "$(list_plugins)"
-        ;;
-    *)
-        echo "Unknown argument: $1"
-        print_help
-        ;;
-    esac
-    shift
+	case "$1" in
+	export)
+		export_plugins
+		;;
+	list)
+		list_plugins
+		;;
+	add)
+		test -n "$2" || print_help
+		add_plugins "$(list_plugins "$2")"
+		shift
+		;;
+	add-all)
+		add_plugins "$(list_plugins)"
+		;;
+	update)
+		test -n "$2" || print_help
+		update_plugins "$(list_plugins "$2")"
+		shift
+		;;
+	update-all)
+		update_plugins "$(list_plugins)"
+		;;
+	remove)
+		test -n "$2" || print_help
+		remove_plugins "$(list_plugins "$2")"
+		shift
+		;;
+	remove-all)
+		remove_plugins "$(list_plugins)"
+		;;
+	*)
+		echo "Unknown argument: $1"
+		print_help
+		;;
+	esac
+	shift
 done
