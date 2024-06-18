@@ -70,9 +70,15 @@ export_plugins() {
 
 # Mimic 'asdf plugin update' to avoid "fatal: couldn't find remote ref ...".
 checkout_plugin_ref() {
+    local plugin_name
+    local plugin_ref
+	local git_dir
+
     plugin_name="${1}"
     plugin_ref="${2}"
-    git --git-dir "${PLUGINS_REPOS_DIR}/${plugin_name}/.git" checkout "${plugin_ref}" -q
+    git_dir="${PLUGINS_REPOS_DIR}/${plugin_name}"
+
+    git -C "${git_dir}" checkout  "${plugin_ref}"
 }
 
 list_plugins() {
